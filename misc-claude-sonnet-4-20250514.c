@@ -71,44 +71,40 @@ unsigned long calls_stats[NR_PM_CALLS];
 int
 do_sysuname(void)
 {
-  size_t field_index;
-  size_t request_type;
-  size_t buffer_len;
-  vir_bytes user_buffer;
-  char *field_string;
-  size_t copy_len;
-  int result;
+    int r;
+    size_t n;
+    char *string;
+    const size_t max_field_count = __arraycount(uts_tbl);
 
-  field_index = m_in.m_lc_pm_sysuname.field;
-  request_type = m_in.m_lc_pm_sysuname.req;
-  buffer_len = m_in.m_lc_pm_sysuname.len;
-  user_buffer = m_in.m_lc_pm_sysuname.value;
+    if (m_in.m_lc_pm_sysuname.field >= max_field_count) {
+        return EINVAL;
+    }
 
-  if (field_index >= __arraycount(uts_tbl)) {
-    return EINVAL;
-  }
+    string = uts_tbl[m_in.m_lc_pm_sysuname.field];
+    if (string == NULL) {
+        return EINVAL;
+    }
 
-  field_string = uts_tbl[field_index];
-  if (field_string == NULL) {
-    return EINVAL;
-  }
+    if (m_in.m_lc_pm_sysuname.req != 0) {
+        return EINVAL;
+    }
 
-  if (request_type != 0) {
-    return EINVAL;
-  }
+    n = strlen(string) + 1;
+    if (n > m_in.m_lc_pm_sysuname.len) {
+        n = m_in.m_lc_pm_sysuname.len;
+    }
 
-  copy_len = strlen(field_string) + 1;
-  if (copy_len > buffer_len) {
-    copy_len = buffer_len;
-  }
+    if (n == 0) {
+        return 0;
+    }
 
-  result = sys_datacopy(SELF, (vir_bytes)field_string, mp->mp_endpoint,
-                        user_buffer, (phys_bytes)copy_len);
-  if (result < 0) {
-    return result;
-  }
+    r = sys_datacopy(SELF, (vir_bytes)string, mp->mp_endpoint,
+                     m_in.m_lc_pm_sysuname.value, (phys_bytes)n);
+    if (r < 0) {
+        return r;
+    }
 
-  return copy_len;
+    return (int)n;
 }
 /* END OF COMPATIBILITY BLOCK */
 
@@ -119,37 +115,34 @@ do_sysuname(void)
 int
 do_getsysinfo(void)
 {
-  vir_bytes src_addr;
-  vir_bytes dst_addr;
+  vir_bytes src_addr, dst_addr;
   size_t len;
-  int request_type;
 
-  if (mp->mp_effuid != 0) {
+  if (mp->mp_effuid != 0)
+  {
     printf("PM: unauthorized call of do_getsysinfo by proc %d '%s'\n",
            mp->mp_endpoint, mp->mp_name);
     sys_diagctl_stacktrace(mp->mp_endpoint);
     return EPERM;
   }
 
-  request_type = m_in.m_lsys_getsysinfo.what;
-  
-  if (request_type == SI_PROC_TAB) {
+  switch(m_in.m_lsys_getsysinfo.what) {
+  case SI_PROC_TAB:
     src_addr = (vir_bytes) mproc;
     len = sizeof(struct mproc) * NR_PROCS;
-  }
+    break;
 #if ENABLE_SYSCALL_STATS
-  else if (request_type == SI_CALL_STATS) {
+  case SI_CALL_STATS:
     src_addr = (vir_bytes) calls_stats;
     len = sizeof(calls_stats);
-  }
+    break;
 #endif
-  else {
+  default:
     return EINVAL;
   }
 
-  if (len != m_in.m_lsys_getsysinfo.size) {
+  if (len != m_in.m_lsys_getsysinfo.size)
     return EINVAL;
-  }
 
   dst_addr = m_in.m_lsys_getsysinfo.where;
   return sys_datacopy(SELF, src_addr, who_e, dst_addr, len);
@@ -160,7 +153,7 @@ do_getsysinfo(void)
  *===========================================================================*/
 int do_getprocnr(void)
 {
-  register struct mproc *rmp;
+  struct mproc *rmp;
 
   if (who_e != RS_PROC_NR) {
     printf("PM: unauthorized call of do_getprocnr by %d\n", who_e);
@@ -183,12 +176,9 @@ int do_getepinfo(void)
 {
   struct mproc *rmp;
   endpoint_t ep;
-  int slot;
-  int ngroups_to_copy;
-  int result;
+  int r, slot, ngroups;
 
   ep = m_in.m_lsys_pm_getepinfo.endpt;
-  
   if (pm_isokendpt(ep, &slot) != OK) {
     return ESRCH;
   }
@@ -199,23 +189,19 @@ int do_getepinfo(void)
   mp->mp_reply.m_pm_lsys_getepinfo.euid = rmp->mp_effuid;
   mp->mp_reply.m_pm_lsys_getepinfo.gid = rmp->mp_realgid;
   mp->mp_reply.m_pm_lsys_getepinfo.egid = rmp->mp_effgid;
-  mp->mp_reply.m_pm_lsys_getepinfo.ngroups = rmp->mp_ngroups;
   
-  ngroups_to_copy = rmp->mp_ngroups;
+  ngroups = rmp->mp_ngroups;
+  mp->mp_reply.m_pm_lsys_getepinfo.ngroups = ngroups;
   
-  if (ngroups_to_copy > m_in.m_lsys_pm_getepinfo.ngroups) {
-    ngroups_to_copy = m_in.m_lsys_pm_getepinfo.ngroups;
+  if (ngroups > m_in.m_lsys_pm_getepinfo.ngroups) {
+    ngroups = m_in.m_lsys_pm_getepinfo.ngroups;
   }
   
-  if (ngroups_to_copy > 0) {
-    result = sys_datacopy(SELF, 
-                         (vir_bytes)rmp->mp_sgroups, 
-                         who_e,
-                         m_in.m_lsys_pm_getepinfo.groups, 
-                         ngroups_to_copy * sizeof(gid_t));
-    
-    if (result != OK) {
-      return result;
+  if (ngroups > 0) {
+    r = sys_datacopy(SELF, (vir_bytes)rmp->mp_sgroups, who_e,
+        m_in.m_lsys_pm_getepinfo.groups, ngroups * sizeof(gid_t));
+    if (r != OK) {
+      return r;
     }
   }
   
@@ -230,7 +216,7 @@ do_reboot(void)
 {
   message m;
   endpoint_t readclock_ep;
-  int result;
+  int ds_result;
 
   if (mp->mp_effuid != SUPER_USER) {
     return EPERM;
@@ -238,12 +224,11 @@ do_reboot(void)
 
   abort_flag = m_in.m_lc_pm_reboot.how;
 
-  if ((abort_flag & RB_POWERDOWN) != 0) {
-    result = ds_retrieve_label_endpt("readclock.drv", &readclock_ep);
-    if (result == OK) {
-      message power_msg;
-      memset(&power_msg, 0, sizeof(power_msg));
-      _taskcall(readclock_ep, RTCDEV_PWR_OFF, &power_msg);
+  if (abort_flag & RB_POWERDOWN) {
+    ds_result = ds_retrieve_label_endpt("readclock.drv", &readclock_ep);
+    if (ds_result == OK) {
+      memset(&m, 0, sizeof(m));
+      _taskcall(readclock_ep, RTCDEV_PWR_OFF, &m);
     }
   }
 
@@ -252,6 +237,7 @@ do_reboot(void)
 
   memset(&m, 0, sizeof(m));
   m.m_type = VFS_PM_REBOOT;
+
   tell_vfs(&mproc[VFS_PROC_NR], &m);
 
   return SUSPEND;
@@ -263,10 +249,12 @@ do_reboot(void)
 int
 do_getsetpriority(void)
 {
-	int arg_which = m_in.m_lc_pm_priority.which;
-	int arg_who = m_in.m_lc_pm_priority.who;
-	int arg_pri = m_in.m_lc_pm_priority.prio;
+	int r, arg_which, arg_who, arg_pri;
 	struct mproc *rmp;
+
+	arg_which = m_in.m_lc_pm_priority.which;
+	arg_who = m_in.m_lc_pm_priority.who;
+	arg_pri = m_in.m_lc_pm_priority.prio;
 
 	if (arg_which != PRIO_PROCESS) {
 		return EINVAL;
@@ -288,14 +276,14 @@ do_getsetpriority(void)
 	}
 
 	if (call_nr == PM_GETPRIORITY) {
-		return rmp->mp_nice - PRIO_MIN;
+		return (rmp->mp_nice - PRIO_MIN);
 	}
 
 	if (rmp->mp_nice > arg_pri && mp->mp_effuid != SUPER_USER) {
 		return EACCES;
 	}
 
-	int r = sched_nice(rmp, arg_pri);
+	r = sched_nice(rmp, arg_pri);
 	if (r != OK) {
 		return r;
 	}
@@ -309,119 +297,113 @@ do_getsetpriority(void)
  *===========================================================================*/
 int do_svrctl(void)
 {
-    unsigned long req;
-    int s;
-    vir_bytes ptr;
-    #define MAX_LOCAL_PARAMS 2
-    static struct {
-        char name[30];
-        char value[30];
-    } local_param_overrides[MAX_LOCAL_PARAMS];
-    static int local_params = 0;
+  unsigned long req;
+  int s;
+  vir_bytes ptr;
+#define MAX_LOCAL_PARAMS 2
+  static struct {
+  	char name[30];
+  	char value[30];
+  } local_param_overrides[MAX_LOCAL_PARAMS];
+  static int local_params = 0;
 
-    req = m_in.m_lc_svrctl.request;
-    ptr = m_in.m_lc_svrctl.arg;
+  req = m_in.m_lc_svrctl.request;
+  ptr = m_in.m_lc_svrctl.arg;
 
-    if (IOCGROUP(req) != 'P' && IOCGROUP(req) != 'M') {
-        return EINVAL;
-    }
+  if (IOCGROUP(req) != 'P' && IOCGROUP(req) != 'M') 
+      return EINVAL;
 
-    if (req != OPMSETPARAM && req != OPMGETPARAM && 
-        req != PMSETPARAM && req != PMGETPARAM) {
-        return EINVAL;
-    }
+  switch(req) {
+  case OPMSETPARAM:
+  case OPMGETPARAM:
+  case PMSETPARAM:
+  case PMGETPARAM: {
+      struct sysgetenv sysgetenv;
+      char search_key[64];
+      char *val_start;
+      size_t val_len;
+      size_t copy_len;
 
-    struct sysgetenv sysgetenv;
-    if (sys_datacopy(who_e, ptr, SELF, (vir_bytes)&sysgetenv, 
-                     sizeof(sysgetenv)) != OK) {
-        return EFAULT;
-    }
+      if (sys_datacopy(who_e, ptr, SELF, (vir_bytes) &sysgetenv,
+              sizeof(sysgetenv)) != OK) 
+          return EFAULT;
 
-    if (req == PMSETPARAM || req == OPMSETPARAM) {
-        if (local_params >= MAX_LOCAL_PARAMS) {
-            return ENOSPC;
-        }
-        
-        if (sysgetenv.keylen <= 0 || 
-            sysgetenv.keylen >= sizeof(local_param_overrides[0].name) ||
-            sysgetenv.vallen <= 0 || 
-            sysgetenv.vallen >= sizeof(local_param_overrides[0].value)) {
-            return EINVAL;
-        }
+      if (req == PMSETPARAM || req == OPMSETPARAM) {
+          if (local_params >= MAX_LOCAL_PARAMS) 
+              return ENOSPC;
+          
+          if (sysgetenv.keylen <= 0 || sysgetenv.vallen <= 0 ||
+              sysgetenv.keylen >= sizeof(local_param_overrides[local_params].name) ||
+              sysgetenv.vallen >= sizeof(local_param_overrides[local_params].value))
+              return EINVAL;
 
-        s = sys_datacopy(who_e, (vir_bytes)sysgetenv.key, SELF,
-                         (vir_bytes)local_param_overrides[local_params].name,
-                         sysgetenv.keylen);
-        if (s != OK) {
-            return s;
-        }
+          s = sys_datacopy(who_e, (vir_bytes) sysgetenv.key,
+              SELF, (vir_bytes) local_param_overrides[local_params].name,
+              sysgetenv.keylen);
+          if (s != OK)
+              return s;
+              
+          s = sys_datacopy(who_e, (vir_bytes) sysgetenv.val,
+              SELF, (vir_bytes) local_param_overrides[local_params].value,
+              sysgetenv.vallen);
+          if (s != OK)
+              return s;
+              
+          local_param_overrides[local_params].name[sysgetenv.keylen] = '\0';
+          local_param_overrides[local_params].value[sysgetenv.vallen] = '\0';
+          local_params++;
 
-        s = sys_datacopy(who_e, (vir_bytes)sysgetenv.val, SELF,
-                         (vir_bytes)local_param_overrides[local_params].value,
-                         sysgetenv.vallen);
-        if (s != OK) {
-            return s;
-        }
+          return OK;
+      }
 
-        local_param_overrides[local_params].name[sysgetenv.keylen] = '\0';
-        local_param_overrides[local_params].value[sysgetenv.vallen] = '\0';
-        local_params++;
-        
-        return OK;
-    }
+      if (sysgetenv.keylen == 0) {
+          val_start = monitor_params;
+          val_len = sizeof(monitor_params);
+      }
+      else {
+          int p;
+          
+          if (sysgetenv.keylen > sizeof(search_key)) 
+              return EINVAL;
+              
+          s = sys_datacopy(who_e, (vir_bytes) sysgetenv.key,
+                  SELF, (vir_bytes) search_key, sysgetenv.keylen);
+          if (s != OK)
+              return s;
 
-    char *val_start;
-    size_t val_len;
+          search_key[sysgetenv.keylen-1] = '\0';
+          
+          for(p = 0; p < local_params; p++) {
+              if (!strcmp(search_key, local_param_overrides[p].name)) {
+                  val_start = local_param_overrides[p].value;
+                  break;
+              }
+          }
+          
+          if (p >= local_params) {
+              val_start = find_param(search_key);
+              if (val_start == NULL)
+                  return ESRCH;
+          }
+          
+          val_len = strlen(val_start) + 1;
+      }
 
-    if (sysgetenv.keylen == 0) {
-        val_start = monitor_params;
-        val_len = sizeof(monitor_params);
-    } else {
-        char search_key[64];
-        
-        if (sysgetenv.keylen > sizeof(search_key)) {
-            return EINVAL;
-        }
-        
-        s = sys_datacopy(who_e, (vir_bytes)sysgetenv.key, SELF,
-                         (vir_bytes)search_key, sysgetenv.keylen);
-        if (s != OK) {
-            return s;
-        }
+      if (val_len > sysgetenv.vallen)
+          return E2BIG;
 
-        search_key[sysgetenv.keylen - 1] = '\0';
-        
-        val_start = NULL;
-        for (int p = 0; p < local_params; p++) {
-            if (strcmp(search_key, local_param_overrides[p].name) == 0) {
-                val_start = local_param_overrides[p].value;
-                break;
-            }
-        }
-        
-        if (val_start == NULL) {
-            val_start = find_param(search_key);
-        }
-        
-        if (val_start == NULL) {
-            return ESRCH;
-        }
-        
-        val_len = strlen(val_start) + 1;
-    }
+      copy_len = MIN(val_len, sysgetenv.vallen);
+      s = sys_datacopy(SELF, (vir_bytes) val_start,
+              who_e, (vir_bytes) sysgetenv.val, copy_len);
+      if (s != OK)
+          return s;
 
-    if (val_len > sysgetenv.vallen) {
-        return E2BIG;
-    }
+      return OK;
+  }
 
-    size_t copy_len = MIN(val_len, sysgetenv.vallen);
-    s = sys_datacopy(SELF, (vir_bytes)val_start, who_e,
-                     (vir_bytes)sysgetenv.val, copy_len);
-    if (s != OK) {
-        return s;
-    }
-
-    return OK;
+  default:
+      return EINVAL;
+  }
 }
 
 /*===========================================================================*
@@ -433,21 +415,23 @@ do_getrusage(void)
 	clock_t user_time, sys_time;
 	struct rusage r_usage;
 	int r;
-	int who = m_in.m_lc_pm_rusage.who;
-	int is_children = (who == RUSAGE_CHILDREN);
+	int is_children;
 
-	if (who != RUSAGE_SELF && who != RUSAGE_CHILDREN)
+	if (m_in.m_lc_pm_rusage.who != RUSAGE_SELF &&
+	    m_in.m_lc_pm_rusage.who != RUSAGE_CHILDREN)
 		return EINVAL;
 
 	memset(&r_usage, 0, sizeof(r_usage));
 
-	if (is_children) {
-		user_time = mp->mp_child_utime;
-		sys_time = mp->mp_child_stime;
-	} else {
+	is_children = (m_in.m_lc_pm_rusage.who == RUSAGE_CHILDREN);
+
+	if (!is_children) {
 		r = sys_times(who_e, &user_time, &sys_time, NULL, NULL);
 		if (r != OK)
 			return r;
+	} else {
+		user_time = mp->mp_child_utime;
+		sys_time = mp->mp_child_stime;
 	}
 
 	set_rusage_times(&r_usage, user_time, sys_time);
